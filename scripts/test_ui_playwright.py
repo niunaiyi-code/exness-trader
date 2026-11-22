@@ -12,7 +12,9 @@ except Exception:
 
 
 def run_test():
-    screenshot_dir = r"C:\Users\hibom\.gemini\antigravity\brain\baeef331-800d-41d9-929f-7ffc8e587666"
+    screenshot_dir = (
+        r"C:\Users\hibom\.gemini\antigravity\brain\baeef331-800d-41d9-929f-7ffc8e587666"
+    )
     os.makedirs(screenshot_dir, exist_ok=True)
     screenshot_path = os.path.join(screenshot_dir, "playwright_cockpit_final.png")
     login_screenshot_path = os.path.join(screenshot_dir, "playwright_login.png")
@@ -30,7 +32,10 @@ def run_test():
             # 只收集 error，忽略无意义的 dev 提示与 Exness 远端对 /candles 的频控 502
             text = msg.text
             if msg.type == "error":
-                if "Static function can not consume context" not in text and "status of 502" not in text:
+                if (
+                    "Static function can not consume context" not in text
+                    and "status of 502" not in text
+                ):
                     console_errors.append(text)
                     print(f"[BROWSER ERROR]: {text}")
 
@@ -62,6 +67,7 @@ def run_test():
                 except Exception:
                     snapshot_states.append(False)
                     print("   [snapshot] parse error")
+
         page.on("response", on_response)
 
         print("1. Navigating to http://localhost:3000 ...")
@@ -87,17 +93,37 @@ def run_test():
         print(f"   Top Asset Bar visible: {hud.first.is_visible()}")
 
         # 校验 HUD Bar 容器高度必须 <= 52px，证明绝无多行折行，真正实现合为一行
-        hud_bar_container = page.locator("text=金色传说 · 驾驶舱").locator("xpath=ancestor::div[contains(@style, 'background: rgb(22, 22, 22)') or contains(@style, '#161616')]").first
+        hud_bar_container = (
+            page.locator("text=金色传说 · 驾驶舱")
+            .locator(
+                "xpath=ancestor::div[contains(@style, 'background: rgb(22, 22, 22)') or contains(@style, '#161616')]"
+            )
+            .first
+        )
         box = hud_bar_container.bounding_box()
         if box:
-            print(f"   HUD Bar BoundingBox: width={box['width']:.1f}px, height={box['height']:.1f}px")
-            assert box['height'] <= 55, f"HUD Bar height={box['height']}px exceeds single-row limit of 55px!"
+            print(
+                f"   HUD Bar BoundingBox: width={box['width']:.1f}px, height={box['height']:.1f}px"
+            )
+            assert box["height"] <= 55, (
+                f"HUD Bar height={box['height']}px exceeds single-row limit of 55px!"
+            )
             print("   [PASS] Verified strictly 1 single-row HUD Bar (height <= 55px)!")
 
         # 校验六大核心资金指标与关键标签
-        for metric in ("账户余额", "当前净值", "浮动盈亏", "已用保证金", "可用保证金", "保证金比例", "Swap-Free 免隔夜息"):
+        for metric in (
+            "账户余额",
+            "当前净值",
+            "浮动盈亏",
+            "已用保证金",
+            "可用保证金",
+            "保证金比例",
+            "Swap-Free 免隔夜息",
+        ):
             loc = page.locator(f"text={metric}")
-            assert loc.first.is_visible(), f"Metric {metric} not found in single-row HUD Bar!"
+            assert loc.first.is_visible(), (
+                f"Metric {metric} not found in single-row HUD Bar!"
+            )
             print(f"   HUD Metric [{metric}]: visible")
 
         # 5. 校验快捷交易与应急控制菜单
@@ -114,7 +140,7 @@ def run_test():
             except Exception:
                 print(f"   QuickAction [{label}]: NOT FOUND")
 
-        # 6. 校验底部双标签页架构（当前持仓 + 历史平仓记录与小计）
+        # 6. 校验底部双标签页架构（当前持仓 + 历史记录与小计）
         print("5. Validating Bottom Tabs & Batch Settlement Subtotals ...")
         pos_tab = page.locator(".ant-tabs-tab").filter(has_text="持仓")
         pos_tab.first.wait_for(state="visible", timeout=5000)
@@ -147,8 +173,11 @@ def run_test():
         # 7. 校验周期切换（M1, M5, M15, M30, H1, H4, D1, W1, MN）
         print("6. Testing timeframe switching across MT5 periods ...")
         import re
+
         for tf in ("M5", "M15", "M30", "H1", "H4", "D1", "W1", "MN", "M1"):
-            tf_btn = page.locator(".ant-segmented-item").filter(has_text=re.compile(f"^{tf}$"))
+            tf_btn = page.locator(".ant-segmented-item").filter(
+                has_text=re.compile(f"^{tf}$")
+            )
             if tf_btn.is_visible():
                 tf_btn.click()
                 page.wait_for_timeout(1000)
@@ -163,7 +192,9 @@ def run_test():
         print(f"   Final Cockpit screenshot saved to {screenshot_path}")
 
         non_empty = [n for n in candle_batches if n > 0]
-        print(f"   Candle fetches: {len(candle_batches)} total, {len(non_empty)} non-empty")
+        print(
+            f"   Candle fetches: {len(candle_batches)} total, {len(non_empty)} non-empty"
+        )
 
         browser.close()
 
@@ -173,13 +204,17 @@ def run_test():
             print(" - ", err)
         return False
     if not candle_batches:
-        print("\nFAILURE: No /market/candles request was made (chart did not load candles).")
+        print(
+            "\nFAILURE: No /market/candles request was made (chart did not load candles)."
+        )
         return False
     if all(n <= 0 for n in candle_batches):
         print(f"\nFAILURE: All candle responses empty/error: {candle_batches}")
         return False
     if not any(snapshot_states):
-        print("\nFAILURE: No successful /market/snapshot response (account state not loaded).")
+        print(
+            "\nFAILURE: No successful /market/snapshot response (account state not loaded)."
+        )
         return False
     print("\nSUCCESS: No console errors + real candles + real snapshot loaded!")
     return True

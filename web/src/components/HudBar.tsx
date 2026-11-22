@@ -91,8 +91,17 @@ export const HudBar: React.FC<HudBarProps> = ({
         )}
       </Space>
 
-      {/* 2. 中部：六大核心资产资金指标（无缝融合在同一单行） */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexShrink: 0, whiteSpace: 'nowrap' }}>
+      {/* 2. 右侧：六大核心资产资金指标 + UTC 时钟 + 策略调参齿轮（统一合并并整体靠右对齐） */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 8,
+          flexShrink: 0,
+          whiteSpace: 'nowrap',
+          marginLeft: 'auto',
+        }}
+      >
         <div style={{ width: 1, height: 16, background: '#333' }} />
         <div>
           <span style={{ color: palette.textSecondary, fontSize: 12, marginRight: 4 }}>账户余额:</span>
@@ -131,14 +140,11 @@ export const HudBar: React.FC<HudBarProps> = ({
             {usedMargin > 0 ? `${liveMarginLevel.toFixed(1)}%` : '∞'}
           </b>
         </div>
-      </div>
-
-      {/* 3. 右侧：UTC 时钟 + 策略调参齿轮（能调就显示，不能就隐藏） */}
-      <Space direction="horizontal" size={8} wrap={false} align="center" style={{ flexShrink: 0 }}>
         <div style={{ width: 1, height: 16, background: '#333' }} />
-        <span style={{ color: palette.textSecondary, fontSize: 12 }}>
-          时钟: <b style={{ color: '#d9d9d9', fontSize: 13 }}>{utcTime}</b>
-        </span>
+        <div>
+          <span style={{ color: palette.textSecondary, fontSize: 12, marginRight: 4 }}>时钟:</span>
+          <b style={{ color: '#d9d9d9', fontSize: 13 }}>{utcTime}</b>
+        </div>
         {canEditParams && (
           <>
             <div style={{ width: 1, height: 16, background: '#333' }} />
@@ -163,7 +169,7 @@ export const HudBar: React.FC<HudBarProps> = ({
             </Tooltip>
           </>
         )}
-      </Space>
+      </div>
     </div>
   );
 };

@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Row, Col, Card, Table, Tag, Alert, message, Tabs, Button, Form, Input, InputNumber, Modal, Spin } from 'antd';
-import type { ColumnsType } from 'antd/es/table';
-import { UnorderedListOutlined, HistoryOutlined, SettingOutlined, UnlockOutlined, SaveOutlined, ReloadOutlined } from '@ant-design/icons';
+import { Alert, message, Button, Spin } from 'antd';
+import { LeftOutlined, RightOutlined, UpOutlined, DownOutlined } from '@ant-design/icons';
 import { api, apiErrorMessage, getSession } from '../lib/api';
 import {
   GOLD_PROFIT_PER_DOLLAR_PER_LOT,
@@ -14,96 +13,10 @@ import { QuickActions } from '../components/QuickActions';
 import { HudBar } from '../components/HudBar';
 import { palette } from '../theme';
 import { playTradeSound } from '../lib/tradeSounds';
-
-interface PositionItem {
-  id: string;
-  ticket: string;
-  symbol: string;
-  direction: 'BUY' | 'SELL';
-  lots: number;
-  openPrice: number;
-  currentPrice: number;
-  profit: number;
-  openTime: string;
-}
-
-export interface HistoryItem {
-  id: string;
-  ticket: string;
-  symbol: string;
-  direction?: 'BUY' | 'SELL';
-  lots: number;
-  closePrice: number;
-  profit: number;
-  closeTime: string;
-}
-
-interface RawDeal {
-  deal_id: string;
-  order_id?: string | null;
-  position_id?: string | null;
-  type?: string | null;
-  deal_type?: string | null;
-  direction?: 'buy' | 'sell' | null;
-  instrument?: string | null;
-  volume?: string | null;
-  price?: string | null;
-  profit?: {
-    amount: string;
-    currency: string;
-  } | null;
-  create_time?: string | null;
-  commission?: string | null;
-}
-
-interface RawDealsResponse {
-  items?: { event_time: string; deal: RawDeal }[];
-  next_cursor?: string | null;
-  has_more?: boolean;
-}
-
-/**
- * 将 Exness 远端真实成交（Deals）转换为历史记录格式，
- * 按成交时间严格倒序（最新平仓排最前）返回真实订单明细。
- * 注意：后端已通过 deal_type=close 参数过滤，前端无需再过滤。
- */
-function parseDealsHistory(deals: RawDeal[]): HistoryItem[] {
-  console.log('[TraderCockpit] parseDealsHistory input:', deals.length, 'deals');
-  if (deals.length > 0) {
-    console.log('[TraderCockpit] First deal:', deals[0]);
-  }
-
-  if (deals.length === 0) return [];
-
-  // 严格按成交时间降序（最新平仓排在最前）
-  const sorted = [...deals].sort((a, b) => {
-    const tA = a.create_time ? new Date(a.create_time).getTime() : 0;
-    const tB = b.create_time ? new Date(b.create_time).getTime() : 0;
-    return tB - tA;
-  });
-
-  return sorted.map((d) => {
-    let t = '';
-    if (d.create_time) {
-      try {
-        const dt = new Date(d.create_time);
-        t = dt.toISOString().replace('T', ' ').slice(0, 19);
-      } catch {
-        t = d.create_time;
-      }
-    }
-    return {
-      id: `deal-${d.deal_id}`,
-      ticket: d.position_id || d.deal_id,
-      symbol: d.instrument || 'XAUUSD',
-      direction: (d.direction || '').toLowerCase() === 'buy' ? 'BUY' : 'SELL',
-      lots: parseFloat(d.volume || '0') || 0,
-      closePrice: parseFloat(d.price || '0') || 0,
-      profit: parseFloat(d.profit?.amount || '0') || 0,
-      closeTime: t,
-    };
-  });
-}
+import { PositionItem } from '../components/orders/LivePositionsTable';
+import { RawDeal } from '../components/orders/HistoryDealsTable';
+import { TradingOrdersPanel, TradingOrdersPanelRef } from '../components/orders/TradingOrdersPanel';
+import { StrategyParamsModal, StrategyParamsData } from '../components/StrategyParamsModal';
 
 /** 后端 /accounts/:id/snapshot 返回的原始持仓结构 */
 interface RawPosition {
@@ -128,18 +41,6 @@ interface RawSnapshot {
   positions?: RawPosition[];
 }
 
-interface StrategyParamsData {
-  account_id: string;
-  initial_lot: string;
-  grid_step: number;
-  grid_step_add: number;
-  grid_step_sec: number;
-  lot_mult: string;
-  tp_distance_usd: string;
-  lock_trigger_usd: string;
-  params_locked: boolean;
-}
-
 /** WS 重连退避上限 */
 const MAX_WS_RETRY_DELAY_MS = 30_000;
 
@@ -153,11 +54,31 @@ export const TraderCockpitPage: React.FC = () => {
   const [equity, setEquity] = useState(0);
   const [usedMargin, setUsedMargin] = useState(0);
   const [positions, setPositions] = useState<PositionItem[]>([]);
-  const [historyRows, setHistoryRows] = useState<HistoryItem[]>([]);
-  const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyCursor, setHistoryCursor] = useState<string | null>(null);
-  const [historyHasMore, setHistoryHasMore] = useState(true);
-  const [activeTab, setActiveTab] = useState('open');
+  const [positionsLoading, setPositionsLoading] = useState(false);
+  const [pageLoading, setPageLoading] = useState(true);
+  const [isQuickActionsMinimized, setIsQuickActionsMinimized] = useState(false);
+  const [isOrdersMinimized, setIsOrdersMinimized] = useState(false);
+  const [viewportHeight, setViewportHeight] = useState(() =>
+    typeof window !== 'undefined' ? window.innerHeight : 900,
+  );
+
+  useEffect(() => {
+    const handleWinResize = () => setViewportHeight(window.innerHeight);
+    window.addEventListener('resize', handleWinResize);
+    return () => window.removeEventListener('resize', handleWinResize);
+  }, []);
+
+  // 动态自适应图表高度：
+  // 1. 底部订单栏折叠后，图表垂直自适应填满屏幕剩余空间（保底 640px，在常见屏幕上扩展至 760px~850px+ 沉浸式巨幕视觉）；
+  // 2. 底部订单栏展开时，维持 480px 标准紧凑高度，上下布局协调。
+  const chartHeight = useMemo(() => {
+    if (isOrdersMinimized) {
+      return Math.max(640, viewportHeight - 140);
+    }
+    return 480;
+  }, [isOrdersMinimized, viewportHeight]);
+
+  const ordersPanelRef = useRef<TradingOrdersPanelRef>(null);
   const [isPaused, setIsPaused] = useState(false);
   const [isRunning, setIsRunning] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
@@ -166,191 +87,58 @@ export const TraderCockpitPage: React.FC = () => {
 
   // 策略运行参数状态
   const [strategyParams, setStrategyParams] = useState<StrategyParamsData | null>(null);
-  const [, setParamsLoading] = useState(false);
-  const [paramsSaving, setParamsSaving] = useState(false);
   const [isParamsModalOpen, setIsParamsModalOpen] = useState(false);
-  const [paramsForm] = Form.useForm();
 
   const handleOpenParamsModal = () => {
-    if (strategyParams) {
-      paramsForm.setFieldsValue(strategyParams);
-    }
     setIsParamsModalOpen(true);
   };
 
   const fetchStrategyParams = useCallback(async () => {
     if (!accountId) return;
-    setParamsLoading(true);
     try {
       const resp = await api.get<StrategyParamsData>(`/accounts/${accountId}/params`);
       setStrategyParams(resp.data);
-      paramsForm.setFieldsValue(resp.data);
     } catch (err) {
       console.warn('[cockpit] Failed to fetch strategy params:', err);
-    } finally {
-      setParamsLoading(false);
     }
-  }, [accountId, paramsForm]);
+  }, [accountId]);
 
   useEffect(() => {
     fetchStrategyParams();
   }, [fetchStrategyParams]);
-
-  const handleSaveParams = async (values: Record<string, unknown>) => {
-    if (!accountId) return;
-    setParamsSaving(true);
-    try {
-      const resp = await api.put<StrategyParamsData>(`/accounts/${accountId}/params`, {
-        initial_lot: String(values.initial_lot),
-        grid_step: Number(values.grid_step),
-        grid_step_add: Number(values.grid_step_add),
-        grid_step_sec: Number(values.grid_step_sec),
-        lot_mult: String(values.lot_mult),
-        tp_distance_usd: String(values.tp_distance_usd),
-        lock_trigger_usd: String(values.lock_trigger_usd),
-      });
-      message.success('策略参数已更新并实时生效至内存策略引擎！');
-      setStrategyParams(resp.data);
-      setIsParamsModalOpen(false);
-    } catch (error) {
-      message.error(apiErrorMessage(error, '参数更新失败'));
-    } finally {
-      setParamsSaving(false);
-    }
-  };
 
   // 用 ref 跟踪最新 bid 与账户币种，避免闭包过期（stale closure）
   const bidRef = useRef(0);
   const currencyRef = useRef('');
   const playedEventsRef = useRef<Set<string>>(new Set());
 
-  // 历史平仓无限滚动相关 Ref，避免闭包过期和重复请求
-  const historyTableContainerRef = useRef<HTMLDivElement>(null);
-  const historyCursorRef = useRef<string | null>(null);
-  const historyHasMoreRef = useRef(true);
-  const historyLoadingRef = useRef(false);
-
+  // 快捷键：在快速交易最小化时，按 Q 可直接展开恢复
   useEffect(() => {
-    historyCursorRef.current = historyCursor;
-  }, [historyCursor]);
-  useEffect(() => {
-    historyHasMoreRef.current = historyHasMore;
-  }, [historyHasMore]);
-  useEffect(() => {
-    historyLoadingRef.current = historyLoading;
-  }, [historyLoading]);
-
-  // 真实平仓历史：从 Exness Open API 拉取真实已成交 deals，按时间倒序展示
-  // 支持无限滚动加载，使用 cursor 分页
-  const refreshDeals = useCallback(async (append = false) => {
-    if (!accountId) return;
-    if (append && !historyHasMoreRef.current) return; // 没有更多数据了
-    if (append && historyLoadingRef.current) return;  // 防止重复加载
-
-    setHistoryLoading(true);
-    historyLoadingRef.current = true;
-    try {
-      // 适度增加单页 limit 到 20 条，确保首屏填满并产生正常纵向滚动条
-      const params = new URLSearchParams({ limit: '20' });
-      const currentCursor = historyCursorRef.current;
-      if (append && currentCursor) {
-        params.append('cursor', currentCursor);
-      } else {
-        params.append('deal_type', 'close');
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement as HTMLElement | null;
+      if (
+        activeEl &&
+        (activeEl.tagName === 'INPUT' ||
+          activeEl.tagName === 'TEXTAREA' ||
+          activeEl.isContentEditable)
+      ) {
+        return;
       }
-
-      const res = await api.get<RawDealsResponse>(
-        `/accounts/${accountId}/history/deals?${params.toString()}`,
-      );
-      console.log('[TraderCockpit] API response:', {
-        items: res.data?.items?.length,
-        has_more: res.data?.has_more,
-        next_cursor: res.data?.next_cursor,
-        total_items: res.data?.items?.length
-      });
-      const items = res.data?.items || [];
-      const rawDeals = items.map((it) => it.deal);
-      console.log('[TraderCockpit] Raw deals:', rawDeals.length);
-      const newRows = parseDealsHistory(rawDeals);
-      console.log('[TraderCockpit] Parsed rows:', newRows.length);
-
-      if (append) {
-        setHistoryRows((prev) => {
-          const existingIds = new Set(prev.map((r) => r.id));
-          const uniqueNew = newRows.filter((r) => !existingIds.has(r.id));
-          console.log('[TraderCockpit] Appending unique', uniqueNew.length, 'rows to', prev.length, 'rows');
-          return [...prev, ...uniqueNew];
-        });
-      } else {
-        console.log('[TraderCockpit] Setting initial rows');
-        setHistoryRows(newRows);
+      if (e.key === 'q' || e.key === 'Q') {
+        if (isQuickActionsMinimized) {
+          e.preventDefault();
+          setIsQuickActionsMinimized(false);
+          message.info({
+            content: '已展开快速交易与应急控制台',
+            key: 'q_restore_notice',
+            duration: 1.5,
+          });
+        }
       }
-
-      const nextCursor = res.data?.next_cursor || null;
-      const hasMore = res.data?.has_more ?? false;
-      console.log('[TraderCockpit] Updated state:', { has_more: hasMore, cursor: nextCursor });
-      setHistoryCursor(nextCursor);
-      historyCursorRef.current = nextCursor;
-      setHistoryHasMore(hasMore);
-      historyHasMoreRef.current = hasMore;
-    } catch (e) {
-      console.warn('[cockpit] Load deals history error:', e);
-    } finally {
-      setHistoryLoading(false);
-      historyLoadingRef.current = false;
-    }
-  }, [accountId]);
-
-  // 触底检测与自动加载下一页
-  const checkAndLoadMore = useCallback(() => {
-    if (!historyHasMoreRef.current || historyLoadingRef.current) return;
-    const tableBody = historyTableContainerRef.current?.querySelector('.ant-table-body');
-    if (!tableBody) return;
-
-    const { scrollTop, scrollHeight, clientHeight } = tableBody;
-    // 距离底部 60px 内时自动触发滚动加载
-    if (scrollHeight - scrollTop - clientHeight < 60) {
-      void refreshDeals(true);
-    }
-  }, [refreshDeals]);
-
-  // 监听表格内容滚动及视口不足时自动补充加载
-  useEffect(() => {
-    const container = historyTableContainerRef.current;
-    if (!container) return;
-
-    const tableBody = container.querySelector('.ant-table-body');
-    if (!tableBody) return;
-
-    const onScroll = () => {
-      checkAndLoadMore();
     };
-
-    tableBody.addEventListener('scroll', onScroll, { passive: true });
-
-    // 若当前条目高度不足以产生滚动条且后端仍有更多数据，自动补充加载下一页
-    if (historyHasMoreRef.current && !historyLoadingRef.current && historyRows.length > 0) {
-      if (tableBody.scrollHeight <= tableBody.clientHeight + 10) {
-        void refreshDeals(true);
-      }
-    }
-
-    return () => {
-      tableBody.removeEventListener('scroll', onScroll);
-    };
-  }, [historyRows.length, activeTab, checkAndLoadMore, refreshDeals]);
-
-  // 切换至历史 Tab 时，若尚无记录则自动触发刷新
-  useEffect(() => {
-    if (activeTab === 'history' && historyRows.length === 0 && !historyLoadingRef.current) {
-      void refreshDeals(false);
-    }
-  }, [activeTab, historyRows.length, refreshDeals]);
-
-  useEffect(() => {
-    refreshDeals();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [accountId]); // 只在 accountId 变化时重新加载，避免无限循环
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isQuickActionsMinimized]);
 
   // UTC 时钟每秒自走（不依赖 tick 到达）
   useEffect(() => {
@@ -393,9 +181,10 @@ export const TraderCockpitPage: React.FC = () => {
   const liveFreeMargin = liveEquity - usedMargin;
   const liveMarginLevel = usedMargin > 0 ? (liveEquity / usedMargin) * 100 : 0;
 
-  // 账户初始基线（余额/净值/保证金 + 持仓 + 状态）。页面加载或WS重连时仅主动请求一次，零定时轮询。
-  const loadBaseline = useCallback(async () => {
+  // 账户初始基线（余额/净值/保证金 + 持仓 + 状态）。页面加载或WS重连时主动请求一次，零定时轮询。
+  const loadBaseline = useCallback(async (showPositionsSpinner = false) => {
     if (!accountId) return;
+    if (showPositionsSpinner) setPositionsLoading(true);
     try {
       const [snapResp, stateResp] = await Promise.allSettled([
         api.get<RawSnapshot>(`/accounts/${accountId}/snapshot`),
@@ -455,6 +244,9 @@ export const TraderCockpitPage: React.FC = () => {
       }
     } catch (err) {
       console.warn('[cockpit] Snapshot baseline load error:', err);
+    } finally {
+      setPageLoading(false);
+      setPositionsLoading(false);
     }
   }, [accountId]);
 
@@ -516,7 +308,7 @@ export const TraderCockpitPage: React.FC = () => {
         setWsConnected(true);
         // 连接或重连成功时主动对齐基线
         void loadBaseline();
-        void refreshDeals();
+        void ordersPanelRef.current?.refreshHistory();
       };
       ws.onmessage = (event) => {
         try {
@@ -577,12 +369,7 @@ export const TraderCockpitPage: React.FC = () => {
               if (deals && deals.length > 0) {
                 const closeDeals = deals.filter((d) => (d.type || d.deal_type || '').toLowerCase() === 'close');
                 if (closeDeals.length > 0) {
-                  const parsed = parseDealsHistory(closeDeals);
-                  setHistoryRows((prev) => {
-                    const existingIds = new Set(prev.map((d) => d.ticket));
-                    const toAdd = parsed.filter((d) => !existingIds.has(d.ticket));
-                    return [...toAdd, ...prev];
-                  });
+                  ordersPanelRef.current?.prependClosedDeals(closeDeals);
 
                   const closedIds = new Set(closeDeals.map((d) => String(d.position_id || d.deal_id)));
                   setPositions((prev) => prev.filter((p) => !closedIds.has(p.id) && !closedIds.has(p.ticket)));
@@ -646,7 +433,7 @@ export const TraderCockpitPage: React.FC = () => {
       if (retryTimer) clearTimeout(retryTimer);
       ws?.close();
     };
-  }, [accountId, loadBaseline, refreshDeals]);
+  }, [accountId, loadBaseline]);
 
   // 登录信息缺失（例如 localStorage 被清）时给出明确提示，而不是拿假账号号请求后端。
   // 必须放在所有 Hook 声明之后，保证 Hook 调用顺序无条件稳定。
@@ -684,7 +471,7 @@ export const TraderCockpitPage: React.FC = () => {
       }
       // 操作完成后立即对齐最新持仓与成交历史基线
       void loadBaseline();
-      void refreshDeals();
+      void ordersPanelRef.current?.refreshHistory();
     } catch (e) {
       message.error(apiErrorMessage(e, `指令 [${actionType}] 执行失败`));
     } finally {
@@ -694,365 +481,161 @@ export const TraderCockpitPage: React.FC = () => {
     }
   };
 
-  const historySummary = useMemo(() => {
-    const totalProfit = historyRows.reduce((acc, r) => acc + (r.profit || 0), 0);
-    return {
-      orderCount: historyRows.length,
-      totalProfit,
-    };
-  }, [historyRows]);
-
-  const columns = [
-    { title: '订单号 (Ticket)', dataIndex: 'ticket', key: 'ticket' },
-    { title: '品种', dataIndex: 'symbol', key: 'symbol' },
-    {
-      title: '方向',
-      dataIndex: 'direction',
-      key: 'direction',
-      render: (d: string) => <Tag color={d === 'BUY' ? 'blue' : 'volcano'}>{d}</Tag>,
-    },
-    { title: '手数', dataIndex: 'lots', key: 'lots', render: (v: number) => v.toFixed(2) },
-    { title: '开仓均价', dataIndex: 'openPrice', key: 'openPrice', render: (v: number) => `$${v.toFixed(2)}` },
-    {
-      title: '当前市价',
-      dataIndex: 'currentPrice',
-      key: 'currentPrice',
-      render: (v: number) => (v > 0 ? `$${v.toFixed(2)}` : '—'),
-    },
-    {
-      title: '浮动盈亏',
-      dataIndex: 'profit',
-      key: 'profit',
-      render: (v: number) => (
-        <span style={{ color: v >= 0 ? palette.profit : palette.loss, fontWeight: 'bold' }}>
-          {v >= 0 ? `+$${v.toFixed(2)}` : `-$${Math.abs(v).toFixed(2)}`}
-        </span>
-      ),
-    },
-    { title: '开仓时间 (UTC)', dataIndex: 'openTime', key: 'openTime' },
-  ];
-
-  const historyColumns: ColumnsType<any> = React.useMemo(() => [
-    { title: '订单号', dataIndex: 'ticket', key: 'ticket', width: 120 },
-    { title: '品种', dataIndex: 'symbol', key: 'symbol', width: 100 },
-    {
-      title: '方向',
-      dataIndex: 'direction',
-      key: 'direction',
-      width: 80,
-      render: (d: string) => <Tag color={d === 'BUY' ? 'blue' : 'volcano'}>{d}</Tag>,
-    },
-    {
-      title: '平仓手数',
-      dataIndex: 'lots',
-      key: 'lots',
-      width: 100,
-      render: (v: number) => (v || 0).toFixed(2),
-    },
-    {
-      title: '平仓价格',
-      dataIndex: 'closePrice',
-      key: 'closePrice',
-      width: 120,
-      render: (v: number) => (v > 0 ? `$${v.toFixed(2)}` : '—'),
-    },
-    {
-      title: '已实现盈亏',
-      dataIndex: 'profit',
-      key: 'profit',
-      width: 140,
-      render: (v: number) => {
-        const isPos = (v || 0) >= 0;
-        return (
-          <span
-            style={{
-              color: isPos ? palette.profit : palette.loss,
-              fontWeight: 'bold',
-            }}
-          >
-            {isPos ? `+$${(v || 0).toFixed(2)}` : `-$${Math.abs(v || 0).toFixed(2)}`}
-          </span>
-        );
-      },
-    },
-    { title: '平仓时间 (UTC)', dataIndex: 'closeTime', key: 'closeTime', width: 180 },
-  ], [palette.profit, palette.loss]);
-
   return (
-    <div style={{ padding: '0 8px' }}>
-      {/* 顶部单行全局高密度状态栏：HUD 标识 + 六大资产核心指标 + 行情点差与时钟 + 调参齿轮 */}
-      <HudBar
-        accountId={accountId}
-        isRunning={isRunning}
-        wsConnected={wsConnected}
-        utcTime={`${utcClock} UTC`}
-        balance={balance}
-        liveEquity={liveEquity}
-        liveFloatingPnl={liveFloatingPnl}
-        usedMargin={usedMargin}
-        liveFreeMargin={liveFreeMargin}
-        liveMarginLevel={liveMarginLevel}
-        canEditParams={Boolean(strategyParams && !strategyParams.params_locked)}
-        onOpenParams={handleOpenParamsModal}
-      />
-
-      {/* 中部：走势图 + 快捷操作 */}
-      <Row gutter={12} style={{ marginBottom: 12 }}>
-        <Col xs={24} lg={17}>
-          <PriceChart currentBid={currentBid} currentAsk={currentAsk} height={480} />
-        </Col>
-        <Col xs={24} lg={7}>
-          <QuickActions
-            isPaused={isPaused}
-            isRunning={isRunning}
-            onAction={handleQuickAction}
-            loading={actionLoading}
-            currentBid={currentBid}
-            currentAsk={currentAsk}
-            symbol="XAUUSD"
-          />
-        </Col>
-      </Row>
-
-      {/* 实时持仓订单与平仓历史 Tabs (含平仓小计) */}
-      <Card
-        style={{ background: palette.bgContainer, borderRadius: 8 }}
-        styles={{ body: { padding: '8px 16px 16px' } }}
-      >
-        <Tabs
-          activeKey={activeTab}
-          onChange={setActiveTab}
-          items={[
-            {
-              key: 'open',
-              label: (
-                <span style={{ fontSize: 14, fontWeight: 'bold' }}>
-                  <UnorderedListOutlined /> 交易 <Tag color="blue">{positions.length} 单</Tag>
-                </span>
-              ),
-              children: (
-                <Table
-                  dataSource={livePositions}
-                  columns={columns}
-                  rowKey="id"
-                  pagination={false}
-                  size="small"
-                />
-              ),
-            },
-            {
-              key: 'history',
-              label: (
-                <span style={{ fontSize: 14, fontWeight: 'bold' }}>
-                  <HistoryOutlined /> 历史{' '}
-                  <Tag color="green">{historySummary.orderCount} 笔</Tag>
-                </span>
-              ),
-              children: (
-                <div ref={historyTableContainerRef} onScrollCapture={checkAndLoadMore}>
-                  <div
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      justifyContent: 'space-between',
-                      padding: '6px 12px',
-                      background: '#1a1a1a',
-                      borderRadius: 4,
-                      marginBottom: 8,
-                      border: '1px solid #2a2a2a',
-                    }}
-                  >
-                    <span style={{ color: palette.textSecondary, fontSize: 12 }}>
-                      💡 Exness 真实历史平仓成交（按平仓时间倒序）
-                    </span>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-                      <span style={{ fontSize: 13, color: palette.textSecondary }}>
-                        平仓总单数: <b style={{ color: '#faad14' }}>{historySummary.orderCount} 笔</b>
-                      </span>
-                      <span style={{ fontSize: 13, color: palette.textSecondary }}>
-                        已实现累计总盈利:{' '}
-                        <b style={{ color: historySummary.totalProfit >= 0 ? palette.profit : palette.loss }}>
-                          {historySummary.totalProfit >= 0
-                            ? `+$${historySummary.totalProfit.toFixed(2)}`
-                            : `-$${Math.abs(historySummary.totalProfit).toFixed(2)}`}
-                        </b>
-                      </span>
-                      <Button
-                        size="small"
-                        icon={<ReloadOutlined spin={historyLoading} />}
-                        onClick={() => refreshDeals(false)}
-                        loading={historyLoading}
-                        title="重新加载最新平仓历史"
-                      >
-                        刷新
-                      </Button>
-                    </div>
-                  </div>
-                  <Table
-                    dataSource={historyRows}
-                    columns={historyColumns}
-                    rowKey="id"
-                    pagination={false}
-                    size="small"
-                    loading={historyLoading && historyRows.length === 0}
-                    scroll={{ y: 380, x: 900 }}
-                    footer={() => {
-                      if (historyLoading && historyRows.length > 0) {
-                        return (
-                          <div style={{ textAlign: 'center', padding: '8px 0', color: palette.textSecondary, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
-                            <Spin size="small" />
-                            <span>正在滚动加载更多历史平仓记录...</span>
-                          </div>
-                        );
-                      }
-                      if (historyHasMore && historyRows.length > 0) {
-                        return (
-                          <div style={{ textAlign: 'center', padding: '6px 0', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12 }}>
-                            <span style={{ color: palette.textSecondary, fontSize: 12 }}>向下滚动自动加载</span>
-                            <Button
-                              size="small"
-                              type="link"
-                              onClick={() => refreshDeals(true)}
-                              loading={historyLoading}
-                            >
-                              点击加载更多
-                            </Button>
-                          </div>
-                        );
-                      }
-                      if (!historyHasMore && historyRows.length > 0) {
-                        return <div style={{ textAlign: 'center', padding: '10px 0', color: palette.textSecondary }}>已加载全部 {historyRows.length} 条历史平仓记录</div>;
-                      }
-                      return null;
-                    }}
-                  />
-                </div>
-              ),
-            },
-          ]}
-        />
-      </Card>
-
-      {/* 策略运行参数微调弹窗（由右上角齿轮触发） */}
-      <Modal
-        title={
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <SettingOutlined style={{ color: palette.gold, fontSize: 18 }} />
-            <span style={{ color: '#ffffff', fontWeight: 'bold' }}>策略运行参数设置</span>
-            <Tag color="success" icon={<UnlockOutlined />}>允许自主调参</Tag>
-          </div>
-        }
-        open={isParamsModalOpen}
-        onCancel={() => setIsParamsModalOpen(false)}
-        footer={null}
-        width={720}
-        destroyOnClose
-      >
-        <Alert
-          type="info"
-          showIcon
-          icon={<UnlockOutlined />}
-          message="自主微调模式已开放"
-          description="当前账户已由管理员开启调参权限。调整参数并点击【保存并热应用到实盘】后，将实时热更新到实盘内存策略引擎中执行。"
-          style={{ marginBottom: 20 }}
+    <Spin spinning={pageLoading} tip="正在连接 Exness 交易服务并加载账户基线..." size="large">
+      <div style={{ padding: '0 8px' }}>
+        {/* 顶部单行全局高密度状态栏：HUD 标识 + 六大资产核心指标 + 行情点差与时钟 + 调参齿轮 */}
+        <HudBar
+          accountId={accountId}
+          isRunning={isRunning}
+          wsConnected={wsConnected}
+          utcTime={`${utcClock} UTC`}
+          balance={balance}
+          liveEquity={liveEquity}
+          liveFloatingPnl={liveFloatingPnl}
+          usedMargin={usedMargin}
+          liveFreeMargin={liveFreeMargin}
+          liveMarginLevel={liveMarginLevel}
+          canEditParams={Boolean(strategyParams && !strategyParams.params_locked)}
+          onOpenParams={handleOpenParamsModal}
         />
 
-        <Form
-          form={paramsForm}
-          layout="vertical"
-          onFinish={handleSaveParams}
-          initialValues={strategyParams || undefined}
+        {/* 中部：走势图 + 快捷操作（支持右侧垂直居中切换 > / <） */}
+        <div
+          style={{
+            display: 'flex',
+            gap: 10,
+            marginBottom: 4,
+            alignItems: 'stretch',
+            width: '100%',
+            position: 'relative',
+          }}
         >
-          <Row gutter={24}>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item
-                label="初始首单手数"
-                name="initial_lot"
-                rules={[{ required: true, message: '请输入初始手数' }]}
-                tooltip="每轮首个方向开单的默认建仓手数（例如 0.01）"
-              >
-                <Input placeholder="0.01" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item
-                label="基础加仓点距 (points)"
-                name="grid_step"
-                rules={[{ required: true, message: '请输入加仓点距' }]}
-                tooltip="逆势加仓的基础点数间距（如 300 点 = 30 pips）"
-              >
-                <InputNumber min={50} max={5000} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item
-                label="间距阶梯递增 (points)"
-                name="grid_step_add"
-                rules={[{ required: true, message: '请输入间距递增' }]}
-                tooltip="每增加一层网格时，间距递增的点数（如 75 点）"
-              >
-                <InputNumber min={0} max={2000} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={6}>
-              <Form.Item
-                label="去抖冷却间隔 (秒)"
-                name="grid_step_sec"
-                rules={[{ required: true, message: '请输入去抖秒数' }]}
-                tooltip="防止急速毛刺连续下多单的最小安全冷却时间，默认 15s"
-              >
-                <InputNumber min={1} max={3600} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <Row gutter={24}>
-            <Col xs={24} sm={12} md={8}>
-              <Form.Item
-                label="加仓倍增系数"
-                name="lot_mult"
-                rules={[{ required: true, message: '请输入倍增系数' }]}
-                tooltip="网格加仓倍率，如 1.45 倍"
-              >
-                <Input placeholder="1.45" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={8}>
-              <Form.Item
-                label="单层止盈距离 (USD)"
-                name="tp_distance_usd"
-                rules={[{ required: true, message: '请输入止盈距离' }]}
-                tooltip="综合持仓均价脱离成本区达到此美元距离时触发整体止盈离场"
-              >
-                <Input placeholder="1.00" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={8}>
-              <Form.Item
-                label="单边对冲锁仓阈值 (USD)"
-                name="lock_trigger_usd"
-                rules={[{ required: true, message: '请输入锁仓阈值' }]}
-                tooltip="单侧浮亏达到此金额时自动触发严格对冲全锁仓"
-              >
-                <Input placeholder="1000.00" />
-              </Form.Item>
-            </Col>
-          </Row>
-
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, marginTop: 12 }}>
-            <Button onClick={() => setIsParamsModalOpen(false)}>取消</Button>
-            <Button
-              type="primary"
-              htmlType="submit"
-              icon={<SaveOutlined />}
-              loading={paramsSaving}
-            >
-              保存并热应用到实盘
-            </Button>
+          {/* 左侧走势图：自适应伸展占满剩余宽度 */}
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <PriceChart currentBid={currentBid} currentAsk={currentAsk} height={chartHeight} />
           </div>
-        </Form>
-      </Modal>
-    </div>
+
+          {/* 右侧快速交易与应急面板：展开为 360px，折叠时为 24px 侧边条，垂直居中切换 > / < */}
+          {!isQuickActionsMinimized ? (
+            <div style={{ width: 360, flexShrink: 0, position: 'relative' }}>
+              {/* 位于走势图与侧栏分界线垂直居中的折叠把手 (>) */}
+              <div
+                onClick={() => setIsQuickActionsMinimized(true)}
+                title="折叠快速交易面板 (快捷键 Q)"
+                style={{
+                  position: 'absolute',
+                  left: -12,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  zIndex: 20,
+                  width: 20,
+                  height: 38,
+                  background: '#1a1a1a',
+                  border: `1px solid ${palette.borderSecondary}`,
+                  borderRadius: '6px 0 0 6px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  cursor: 'pointer',
+                  boxShadow: '-2px 0 6px rgba(0,0,0,0.4)',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                <RightOutlined style={{ color: palette.gold, fontSize: 12 }} />
+              </div>
+              <QuickActions
+                isPaused={isPaused}
+                isRunning={isRunning}
+                onAction={handleQuickAction}
+                loading={actionLoading}
+                currentBid={currentBid}
+                currentAsk={currentAsk}
+                symbol="XAUUSD"
+              />
+            </div>
+          ) : (
+            <div
+              onClick={() => setIsQuickActionsMinimized(false)}
+              title="展开快速交易面板 (快捷键 Q)"
+              style={{
+                width: 24,
+                flexShrink: 0,
+                background: palette.bgContainer,
+                borderRadius: 8,
+                border: `1px solid ${palette.borderSecondary}`,
+                cursor: 'pointer',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                userSelect: 'none',
+                transition: 'all 0.2s ease',
+              }}
+            >
+              <LeftOutlined style={{ color: palette.gold, fontSize: 13 }} />
+            </div>
+          )}
+        </div>
+
+        {/* 图表与底部订单面板之间的居中折叠把手 (^ / v) */}
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'center',
+            alignItems: 'center',
+            margin: '2px 0 6px',
+          }}
+        >
+          <Button
+            type="text"
+            size="small"
+            icon={
+              isOrdersMinimized ? (
+                <UpOutlined style={{ color: palette.gold, fontSize: 12 }} />
+              ) : (
+                <DownOutlined style={{ color: palette.gold, fontSize: 12 }} />
+              )
+            }
+            onClick={() => setIsOrdersMinimized(!isOrdersMinimized)}
+            style={{
+              background: '#1a1a1a',
+              border: `1px solid ${palette.borderSecondary}`,
+              borderRadius: 12,
+              height: 20,
+              padding: '0 20px',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              cursor: 'pointer',
+              color: palette.gold,
+              boxShadow: '0 2px 4px rgba(0,0,0,0.3)',
+              transition: 'all 0.2s ease',
+            }}
+            title={isOrdersMinimized ? '展开底部持仓与历史订单面板' : '折叠底部订单面板'}
+          />
+        </div>
+
+        {/* 底部：持仓订单与历史平仓面板（组件化封装，支持在位折叠最小化） */}
+        <TradingOrdersPanel
+          ref={ordersPanelRef}
+          accountId={accountId}
+          positions={livePositions}
+          positionsLoading={positionsLoading}
+          minimized={isOrdersMinimized}
+          onRefreshPositions={() => loadBaseline(true)}
+        />
+
+        {/* 策略运行参数微调弹窗（独立组件封装，由右上角齿轮触发） */}
+        <StrategyParamsModal
+          open={isParamsModalOpen}
+          onClose={() => setIsParamsModalOpen(false)}
+          accountId={accountId}
+          params={strategyParams}
+          onParamsSaved={(newParams) => setStrategyParams(newParams)}
+        />
+      </div>
+    </Spin>
   );
 };
 

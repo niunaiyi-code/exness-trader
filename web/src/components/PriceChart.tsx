@@ -184,17 +184,35 @@ export const PriceChart: React.FC<PriceChartProps> = ({
     const handleResize = () => {
       if (chartContainerRef.current && chartRef.current) {
         const width = chartContainerRef.current.clientWidth;
-        chartRef.current.applyOptions({
-          width,
-        });
-        updateTpCoords();
+        if (width > 0) {
+          chartRef.current.applyOptions({
+            width,
+          });
+          updateTpCoords();
+        }
       }
     };
+
+    // 重点：使用 ResizeObserver 精准监听挂载容器尺寸变动（右侧折叠、Grid 变换等，不依赖全局 window.resize）
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const { width } = entry.contentRect;
+        if (width > 0 && chartRef.current) {
+          chartRef.current.applyOptions({ width: Math.floor(width) });
+          updateTpCoords();
+        }
+      }
+    });
+
+    if (chartContainerRef.current) {
+      resizeObserver.observe(chartContainerRef.current);
+    }
 
     window.addEventListener('resize', handleResize);
     handleResize();
 
     return () => {
+      resizeObserver.disconnect();
       window.removeEventListener('resize', handleResize);
       buyTpLineRef.current = null;
       sellTpLineRef.current = null;
@@ -202,6 +220,14 @@ export const PriceChart: React.FC<PriceChartProps> = ({
       chart.remove();
       setChartReady(false);
     };
+  }, [updateTpCoords]);
+
+  // 高度自适应：当外部传入的 height 改变时平滑更新尺寸，绝不销毁和重建图表
+  useEffect(() => {
+    if (chartRef.current && height > 0) {
+      chartRef.current.applyOptions({ height });
+      updateTpCoords();
+    }
   }, [height, updateTpCoords]);
 
   // 格式化实时价差
