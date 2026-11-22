@@ -1,0 +1,37 @@
+[package]
+name = "exness-api"
+description = "Exness Trader API SDK: Ed25519 request signing, REST client, WebSocket streams (no business logic)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+autoexamples = false
+
+[dependencies]
+tokio = { workspace = true }
+reqwest = { workspace = true }
+tokio-tungstenite = { workspace = true }
+futures-util = { workspace = true }
+url = { workspace = true }
+
+ed25519-dalek = { workspace = true }
+sha2 = { workspace = true }
+base64 = { workspace = true }
+hex = { workspace = true }
+zeroize = { workspace = true }
+rand = { workspace = true }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[[example]]
+name = "ws_tick_stream"
+path = "examples/ws_tick_stream.rs"

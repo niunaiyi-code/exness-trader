@@ -1,0 +1,13 @@
+[package]
+name = "gl-strategy"
+description = "GoldLegend strategy kernel: pure, no IO, reusable by the live runner and the replay tool"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1.37"
+serde = { workspace = true }
+chrono = { workspace = true }

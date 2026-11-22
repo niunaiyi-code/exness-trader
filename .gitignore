@@ -1,0 +1,53 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# Node / Frontend
+node_modules/
+dist/
+.vite/
+.env
+.env.local
+*.log
+
+# 前端调试与测试产物
+web/tests/*.html
+web/tests/screenshots/
+web/test-results/
+web/playwright-report/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.db*
+*.db-shm
+*.db-wal
+
+# Temporary / Scratch / Logs
+scratch/
+test_output.txt
+.workbuddy/
+.claude/
+
+
+# Config (example only)
+config.toml
+!config.example.toml
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib

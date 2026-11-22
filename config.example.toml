@@ -1,0 +1,24 @@
+# GL Server Configuration
+
+[server]
+host = "127.0.0.1"
+port = 8080
+static_dir = "web/dist"  # Optional: serve frontend
+
+[database]
+url = "sqlite:gl.db"
+max_connections = 10
+
+[exness]
+gateway_url = ""  # Required: from Key Management DNS widget
+rest_base_url = ""  # Optional: testing override only
+
+[auth]
+jwt_secret = "CHANGE_ME_IN_PRODUCTION"
+jwt_expiry_hours = 24
+
+[crypto]
+master_key = ""  # Required: 32 bytes base64 (openssl rand -base64 32)
+
+[calendar]
+api_key = ""  # Optional: FinanceCalendar API key; leave empty to disable calendar refresh

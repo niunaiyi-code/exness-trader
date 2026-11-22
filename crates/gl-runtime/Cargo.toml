@@ -1,0 +1,18 @@
+[package]
+name = "gl-runtime"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+exness-api = { path = "../exness-api" }
+gl-strategy = { path = "../gl-strategy" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+rust_decimal = { workspace = true }
+rust_decimal_macros = "1.40"
+serde = { workspace = true }
+chrono = { workspace = true }
+thiserror = "2.0"
+uuid = { version = "1.11", features = ["v4", "serde"] }
+prometheus = { workspace = true }
+lazy_static = { workspace = true }
